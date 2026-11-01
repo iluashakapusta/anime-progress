@@ -101,6 +101,8 @@ const Api = {
   logout: () => api("/accounts/users/auth/logout", { method: "POST", body: {}, auth: true }).catch(() => {}),
   profile: () => api("/accounts/users/me/profile", { auth: true }),
   history: (page) => api("/accounts/users/me/views/history", { query: { page, limit: 50 }, auth: true }),
+  timecodes: () => api("/accounts/users/me/views/timecodes", { auth: true }),
+  episode: (id) => api(`/anime/releases/episodes/${id}`),
   collectionIds: () => api("/accounts/users/me/collections/ids", { auth: true }),
   addToCollection: (id, c) => api("/accounts/users/me/collections", { method: "POST", body: [{ release_id: id, type_of_collection: c }], auth: true }),
   removeFromCollection: (id) => api("/accounts/users/me/collections", { method: "DELETE", body: [{ release_id: id }], auth: true }),
@@ -307,6 +309,36 @@ async function syncHistory(full) {
   }
   cache.views = views;
   cache.historySyncedUntil = newest;
+  await syncTimecodes();
+}
+
+/**
+ * The history list is rebuilt by a background job on the server and lags behind,
+ * while the timecodes list changes as soon as the site's player saves. Take time and
+ * "watched" from timecodes; history only tells which title an episode belongs to.
+ */
+async function syncTimecodes() {
+  setStep("Таймкоды");
+  const rows = await Api.timecodes();
+  const now = Date.now();
+  const unknown = [];
+  for (const row of rows || []) {
+    const [id, time, watched] = row;
+    if (typeof id !== "string") continue;
+    const t = Number(time) || 0, w = !!watched;
+    const v = cache.views[id];
+    if (!v) { unknown.push({ id, t, w }); continue; }
+    // Changed since history last saw it: this is the freshest activity
+    if (Math.abs(v.t - t) >= 1 || v.w !== w) cache.views[id] = { ...v, t, w, u: Math.max(v.u, now) };
+  }
+  // Episodes history has not caught up with yet: look up their title directly
+  await pool(unknown.slice(0, 40), 6, async ({ id, t, w }) => {
+    try {
+      const ep = await Api.episode(id);
+      const releaseId = ep?.release_id ?? ep?.release?.id;
+      if (releaseId != null) cache.views[id] = { r: releaseId, t, w, u: now };
+    } catch {}
+  });
 }
 
 async function loadCatalog(ids) {
