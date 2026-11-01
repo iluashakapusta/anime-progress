@@ -1,5 +1,5 @@
 // App shell cache: the page opens instantly and offline; API calls always go to the network.
-const VERSION = "v3";
+const VERSION = "v4";
 const SHELL = ["./", "index.html", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
@@ -18,7 +18,7 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
   // Network first so updates arrive right away; the cache covers offline starts.
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: "no-cache" })
       .then((resp) => {
         const copy = resp.clone();
         caches.open(VERSION).then((c) => c.put(e.request, copy));

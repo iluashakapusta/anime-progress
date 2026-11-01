@@ -1,5 +1,7 @@
 "use strict";
 
+const APP_VERSION = "1.3";
+
 const SITE = "https://aniliberty.top";
 const API = SITE + "/api/v1";
 const DAY = 24 * 3600 * 1000;
@@ -323,7 +325,7 @@ async function syncTimecodes() {
   const now = Date.now();
   const unknown = [];
   for (const row of rows || []) {
-    const [id, time, watched] = row;
+    const [id, time, watched] = Array.isArray(row) ? row : [row?.release_episode_id, row?.time, row?.is_watched];
     if (typeof id !== "string") continue;
     const t = Number(time) || 0, w = !!watched;
     const v = cache.views[id];
@@ -685,7 +687,8 @@ function openMenu() {
     <button class="opt" id="m-refresh">Обновить</button>
     <button class="opt" id="m-full">Перечитать всю историю</button>
     <button class="opt" id="m-logout" style="color:var(--danger)">Выйти из аккаунта</button>
-    <div class="muted" style="padding:8px 4px 0">${cache.lastSync ? "Последнее обновление: " + new Date(cache.lastSync).toLocaleString("ru-RU") : ""}</div>`);
+    <div class="muted" style="padding:8px 4px 0">${cache.lastSync ? "Последнее обновление: " + new Date(cache.lastSync).toLocaleString("ru-RU") : ""}</div>
+    <div class="muted" style="padding:2px 4px 0">Версия приложения ${APP_VERSION}</div>`);
   $("#m-refresh").onclick = () => { closeSheet(); runSync(); };
   $("#m-full").onclick = () => { closeSheet(); runSync(true); };
   $("#m-logout").onclick = logout;
@@ -803,6 +806,9 @@ function renderTitle() {
       <a class="btn text" href="${releaseUrl(main.alias)}" target="_blank" rel="noopener">Страница на сайте</a>
       <button class="btn text danger" id="remove">Убрать из списка</button>
     </div>
+    <div class="row">
+      <button class="btn text" id="check">Проверить таймкод на сервере</button>
+    </div>
     ${e.seasons.map((s, i) => `
       <div class="season"><b>${e.seasons.length > 1 ? `Сезон ${i + 1} · ` : ""}${esc(s.name.main)}</b>
         <span class="muted">${[s.year, s.type?.description, (s.episodes || []).length + " эп.", s.is_ongoing ? "выходит" : null].filter(Boolean).join(" · ")}</span></div>
@@ -812,6 +818,7 @@ function renderTitle() {
   $("#back").onclick = () => history.back();
   appEl.querySelectorAll("[data-set]").forEach((b) => b.onclick = () => setCollection(e, b.dataset.set));
   $("#remove").onclick = () => confirmRemove(e);
+  $("#check").onclick = () => checkTimecode(e);
   appEl.querySelectorAll("[data-ep]").forEach((b) => b.onclick = () => {
     const [releaseId, epId] = b.dataset.ep.split("|");
     const season = e.seasons.find((s) => s.id === Number(releaseId));
@@ -848,6 +855,45 @@ function openEpisodeSheet(entry, season, ep) {
   $("#e-upto").onclick = () => { closeSheet(); markWatchedUpTo(entry, ep.id); };
   const u = $("#e-unwatch");
   if (u) u.onclick = () => { closeSheet(); markUnwatched(ep, season.id); };
+}
+
+/** Shows what the account stores for the current episode, straight from the server. */
+async function checkTimecode(entry) {
+  const ep = entry.position?.episode;
+  if (!ep) return toast("В этом тайтле нет серий");
+  openSheet(`<div class="grab"></div><div class="title" style="font-size:17px">Проверяю…</div><div class="bar-progress indet"></div>`);
+  const fmtAt = (ms) => (ms ? new Date(ms).toLocaleString("ru-RU") : "—");
+  let tc = "нет записи", hist = "нет записи", raw = "";
+  try {
+    const rows = await Api.timecodes();
+    const row = (rows || []).find((r) => (Array.isArray(r) ? r[0] : r?.release_episode_id) === ep.id);
+    if (row) {
+      const [, t, w] = Array.isArray(row) ? row : [null, row.time, row.is_watched];
+      tc = `${formatTime(t)}${w ? ", досмотрена" : ""}`;
+    }
+    raw = `Записей в списке таймкодов: ${(rows || []).length}`;
+  } catch (e) {
+    if (e instanceof AuthError) return sessionExpired();
+    tc = "ошибка: " + e.message;
+  }
+  try {
+    for (let page = 1; page <= 3; page++) {
+      const resp = await Api.history(page);
+      const it = (resp?.data || []).find((x) => x.release_episode_id === ep.id);
+      if (it) { hist = `${formatTime(it.time)}${it.is_watched ? ", досмотрена" : ""}, обновлено ${fmtAt(Date.parse(it.updated_at))}`; break; }
+      if (page >= (resp?.meta?.pagination?.total_pages || 1)) break;
+    }
+  } catch (e) { hist = "ошибка: " + e.message; }
+  const mine = cache.views[ep.id];
+  openSheet(`
+    <div class="grab"></div>
+    <div class="title" style="font-size:17px">Серия ${esc(fmtOrd(ep.ordinal))} · ${esc(entry.position.release.name.main)}</div>
+    <div class="opt" style="display:grid;gap:2px"><span class="muted">Список таймкодов в аккаунте (обновляется сразу)</span><b>${esc(tc)}</b></div>
+    <div class="opt" style="display:grid;gap:2px"><span class="muted">История просмотров в аккаунте</span><b>${esc(hist)}</b></div>
+    <div class="opt" style="display:grid;gap:2px"><span class="muted">Что показывает приложение</span><b>${mine ? esc(formatTime(mine.t) + (mine.w ? ", досмотрена" : "")) : "нет данных"}</b></div>
+    <div class="muted" style="padding:8px 4px 0">${esc(raw)} · Последнее обновление: ${esc(fmtAt(cache.lastSync))} · Версия ${APP_VERSION}</div>
+    <button class="btn ghost block" id="c-close" style="margin-top:10px">Закрыть</button>`);
+  $("#c-close").onclick = closeSheet;
 }
 
 function confirmRemove(entry) {
