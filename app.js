@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = "1.3";
+const APP_VERSION = "1.4";
 
 const SITE = "https://aniliberty.top";
 const API = SITE + "/api/v1";
@@ -920,6 +920,6 @@ render();
 if (token) runSync();
 // Catch up with what was watched on the site while the app was in the background
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && token && Date.now() - cache.lastSync > 60 * 1000) runSync();
+  if (document.visibilityState === "visible" && token && Date.now() - cache.lastSync > 10 * 1000) runSync();
 });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
