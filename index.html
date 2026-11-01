@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Аниме-прогресс</title>
 <meta name="description" content="Где вы остановились в каждом аниме: сезон, серия и минута по вашей истории на AniLiberty">
-<meta name="theme-color" content="#121218" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#f8f7fa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#071728" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#eef5f8" media="(prefers-color-scheme: light)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -17,18 +17,21 @@
 <style>
 /* Layout: one column app shell; sticky top bar, scrolling content, bottom sheet for dialogs */
 :root {
-  --bg: #f8f7fa;
+  --bg: #eef5f8;
+  --glow: #cfeef5;
   --surface: #ffffff;
-  --surface-2: #f0eef4;
-  --ink: #1b1b21;
-  --muted: #5b5966;
-  --line: #e2e0e8;
-  --accent: #c4441f;
+  --surface-2: #e3eef3;
+  --ink: #0d2233;
+  --muted: #4b6476;
+  --line: #d3e2ea;
+  --accent: #0a84a8;
   --on-accent: #ffffff;
-  --accent-soft: #ffdbd0;
-  --on-accent-soft: #3b0d00;
-  --tag: #e3dfff;
-  --on-tag: #1b1830;
+  --accent-soft: #cdeff7;
+  --on-accent-soft: #053347;
+  --tag: #d2f4e6;
+  --on-tag: #0b3d2e;
+  --new: #10b981;
+  --on-new: #ffffff;
   --danger: #b3261e;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -38,14 +41,15 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #121218; --surface: #1c1b23; --surface-2: #26252f; --ink: #e6e4ec; --muted: #adaab8;
-    --line: #34333f; --accent: #ff8a68; --on-accent: #2b0f06; --accent-soft: #5a2516; --on-accent-soft: #ffdbd0;
-    --tag: #2e2b42; --on-tag: #e3dfff; --danger: #ff8a8a;
+    --bg: #071728; --glow: #0f4c8a; --surface: #0e2237; --surface-2: #163049; --ink: #e4f1f8; --muted: #93abbd;
+    --line: #1f3a55; --accent: #4fd1ec; --on-accent: #032130; --accent-soft: #0f3f55; --on-accent-soft: #bff3ff;
+    --tag: #0d3b37; --on-tag: #b5f5dc; --new: #34d399; --on-new: #032a1d; --danger: #ff8a8a;
     color-scheme: dark;
   }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.4 var(--font); }
+body { background: radial-gradient(130% 55% at 50% -12%, color-mix(in srgb, var(--glow) 55%, transparent), transparent 70%) no-repeat, var(--bg); }
 body { min-height: 100dvh; overscroll-behavior-y: none; }
 button { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
@@ -77,7 +81,7 @@ main {
   flex: none; border: 1px solid var(--line); background: transparent; color: var(--muted);
   padding: 6px 12px; border-radius: 999px; font-size: 14px; cursor: pointer; white-space: nowrap;
 }
-.chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 
 .status { font-size: 13px; color: var(--muted); margin-bottom: 12px; display: grid; gap: 6px; }
 .status.err { color: var(--danger); }
@@ -179,6 +183,73 @@ main {
 .hint { background: var(--surface); border-radius: 14px; padding: 12px 14px; font-size: 14px; color: var(--muted); margin-bottom: 12px; display: flex; gap: 10px; align-items: flex-start; }
 .hint b { color: var(--ink); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.tag.new { background: var(--new); color: var(--on-new); }
+.sort {
+  flex: none; height: 38px; border-radius: 10px; border: 0; background: var(--surface-2); color: var(--ink);
+  font: inherit; font-size: 14px; padding: 0 10px; max-width: 46%;
+}
+
+/* Bottom tab bar */
+main { padding-bottom: calc(var(--bottom) + 96px); }
+.tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  padding: 6px max(8px, env(safe-area-inset-right)) calc(var(--bottom) + 6px) max(8px, env(safe-area-inset-left));
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: saturate(1.6) blur(18px); -webkit-backdrop-filter: saturate(1.6) blur(18px);
+  border-top: 0.5px solid var(--line);
+}
+.tab {
+  border: 0; background: none; display: grid; justify-items: center; gap: 2px; padding: 4px 0;
+  color: var(--muted); font-size: 11px; cursor: pointer; position: relative;
+}
+.tab svg { width: 26px; height: 26px; }
+.tab.on { color: var(--accent); }
+.badge {
+  position: absolute; top: 0; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 9px; background: var(--new); color: var(--on-new); font: 700 11px/18px var(--font); font-style: normal;
+}
+
+/* Title page backdrop: the poster, blurred, fading into the page */
+.hero {
+  position: absolute; left: 0; right: 0; top: 0; height: 420px; z-index: 0; pointer-events: none; overflow: hidden;
+}
+.hero::before {
+  content: ""; position: absolute; inset: -60px; background: var(--img, none) center / cover no-repeat;
+  filter: blur(36px) saturate(1.4); opacity: .55;
+}
+.hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to bottom, transparent 20%, var(--bg) 92%); }
+.over-hero { position: relative; z-index: 1; }
+.over-hero .poster.lg { box-shadow: 0 12px 30px rgb(0 0 0 / .35); }
+
+.rating { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
+.star {
+  height: 38px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface);
+  font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; color: var(--muted); padding: 0;
+}
+.star.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+.sched:not(.mine) { opacity: .62; }
+.sched.mine .title { color: var(--accent); }
+
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.pick { border: 0; background: none; padding: 0; text-align: left; display: grid; gap: 4px; cursor: pointer; min-width: 0; }
+.poster.fill { width: 100%; height: auto; aspect-ratio: 5 / 7; border-radius: 10px; }
+.pick-title { font-size: 13px; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+.stat-hero {
+  display: grid; gap: 2px; padding: 18px; border-radius: 18px; margin-bottom: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, var(--surface)), color-mix(in srgb, var(--new) 16%, var(--surface)));
+}
+.stat-hero b { font-size: 40px; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.stat { background: var(--surface); border-radius: 14px; padding: 12px 14px; display: grid; gap: 2px; }
+.stat b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 13px; color: var(--muted); }
+.genres { display: grid; gap: 10px; }
+.genre { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; }
+.genre .meter { grid-column: 1 / -1; height: 6px; }
 @media (prefers-reduced-motion: reduce) { *, *::after { animation: none !important; } }
 </style>
 </head>
@@ -187,6 +258,6 @@ main {
 <div id="sheet"></div>
 <div id="toast" class="toast" hidden></div>
 <noscript><p style="padding:24px">Для работы приложения нужен JavaScript.</p></noscript>
-<script src="app.js?v=1.4"></script>
+<script src="app.js?v=2.0"></script>
 </body>
 </html>
