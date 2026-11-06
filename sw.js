@@ -1,5 +1,5 @@
 // App shell cache: the page opens instantly and offline; API calls always go to the network.
-const VERSION = "v6";
+const VERSION = "v7";
 const SHELL = ["./", "index.html", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {

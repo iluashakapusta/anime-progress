@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = "2.0";
+const APP_VERSION = "2.1";
 
 const SITE = "https://aniliberty.top";
 const API = SITE + "/api/v1";
@@ -123,6 +123,58 @@ const Api = {
     }
   },
 };
+
+// General anime catalog for titles AniLiberty does not have. Read-only, no account.
+const CATALOG = "https://shikimori.io";
+const HIDDEN_KINDS = new Set(["pv", "cm"]); // promo videos and ads
+const KIND = { tv: "ТВ", movie: "Фильм", ova: "OVA", ona: "ONA", special: "Спешл", tv_special: "ТВ-спешл", music: "Клип" };
+const STATUS = { anons: "Анонс", ongoing: "Выходит", released: "Вышло" };
+
+async function catalogGet(path, query) {
+  const url = new URL(CATALOG + "/api" + path);
+  if (query) for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+  let resp;
+  try { resp = await fetch(url, { headers: { Accept: "application/json" } }); }
+  catch { throw new ApiError(0, "Общий каталог недоступен"); }
+  if (!resp.ok) throw new ApiError(resp.status, resp.status === 429 ? "Слишком много запросов к общему каталогу, попробуйте чуть позже" : `Общий каталог ответил ошибкой (${resp.status})`);
+  return resp.json();
+}
+const Catalog = {
+  search: (q) => catalogGet("/animes", { search: q, limit: 20, censored: "true" }),
+  anime: (id) => catalogGet(`/animes/${id}`),
+};
+const catalogPoster = (a) => {
+  const p = a?.image?.preview || a?.image?.original;
+  return p && !p.includes("missing") ? (p.startsWith("http") ? p : CATALOG + p) : null;
+};
+const catalogMeta = (a) => [
+  (a.aired_on || "").slice(0, 4) || null, KIND[a.kind] || null,
+  a.episodes ? a.episodes + " эп." : a.episodes_aired ? a.episodes_aired + " эп." : null,
+  a.status === "ongoing" ? "выходит" : a.status === "anons" ? "анонс" : null,
+].filter(Boolean).join(" · ");
+/** Catalog descriptions use BBCode-like markup: keep only the text. */
+const plainDescription = (t) => String(t || "").replace(/\[\[|\]\]/g, "").replace(/\[[^\]]*\]/g, "").replace(/\s+\n/g, "\n").trim();
+
+// Which catalog titles AniLiberty has: catalog id -> AniLiberty release (or null), remembered for a week
+let presence = store.get("presence", {});
+const PRESENCE_TTL = 7 * DAY;
+function rememberPresence(catalogId, release) {
+  presence[catalogId] = { r: release ? { id: release.id, name: release.name, alias: release.alias, year: release.year, type: release.type, poster: release.poster, episodes_total: release.episodes_total, is_ongoing: release.is_ongoing } : null, at: Date.now() };
+}
+function knownPresence(catalogId) {
+  const p = presence[catalogId];
+  return p && Date.now() - p.at < PRESENCE_TTL ? p : null;
+}
+
+// Titles saved from the general catalog: kept on this device only, without watch tracking
+let saved = store.get("external", {});
+function saveExternal() { store.set("external", saved); }
+function externalEntries() {
+  return Object.values(saved).map((x) => ({
+    key: "s:" + x.id, external: true, ext: x, title: x.title, poster: x.poster, collection: x.collection,
+    position: null, isNew: false, seasons: [], ids: [], genres: x.genres || [],
+  }));
+}
 
 const posterUrl = (r) => {
   const p = r && r.poster;
@@ -550,7 +602,7 @@ const meter = (f) => (f == null ? "" : `<div class="meter"><i style="width:${(f 
 let view = { name: "home" };
 let filter = store.get("filter", "ALL");
 let login = { busy: false, error: null, otp: null, tab: "password" };
-let search = { q: "", loading: false, results: [], error: null };
+let search = { q: "", loading: false, results: [], ext: [], checking: new Set(), error: null };
 
 function go(name, params = {}, push = true) {
   view = { name, ...params };
@@ -668,7 +720,7 @@ let listQuery = "";
 function sortedEntries(list) {
   const pct = (e) => (e.position && e.position.total ? e.position.watched / e.position.total : 0);
   const by = {
-    recent: (a, b) => (b.isNew - a.isNew) || (b.position?.activity || 0) - (a.position?.activity || 0) || a.title.localeCompare(b.title, "ru"),
+    recent: (a, b) => (b.isNew - a.isNew) || (b.position?.activity || b.ext?.addedAt || 0) - (a.position?.activity || a.ext?.addedAt || 0) || a.title.localeCompare(b.title, "ru"),
     title: (a, b) => a.title.localeCompare(b.title, "ru"),
     progress: (a, b) => pct(b) - pct(a) || a.title.localeCompare(b.title, "ru"),
   }[sortMode] || (() => 0);
@@ -676,17 +728,21 @@ function sortedEntries(list) {
 }
 
 function renderHome() {
+  const all = entries.concat(externalEntries());
   const counts = {};
-  for (const e of entries) counts[e.collection || "HISTORY"] = (counts[e.collection || "HISTORY"] || 0) + 1;
+  for (const e of all) counts[e.collection || "HISTORY"] = (counts[e.collection || "HISTORY"] || 0) + 1;
   const newCount = entries.filter((e) => e.isNew).length;
+  const extCount = all.length - entries.length;
   const q = listQuery.trim().toLowerCase();
-  const shown = sortedEntries(entries.filter((e) =>
-    (filter === "ALL" || (filter === "NEW" ? e.isNew : filter === "HISTORY" ? !e.collection : e.collection === filter)) &&
-    (!q || e.title.toLowerCase().includes(q) || e.seasons.some((r) => (r.name.english || "").toLowerCase().includes(q)))));
-  const chips = [["ALL", `Все · ${entries.length}`]]
+  const shown = sortedEntries(all.filter((e) =>
+    (filter === "ALL" || (filter === "NEW" ? e.isNew : filter === "EXT" ? e.external : filter === "HISTORY" ? !e.collection : e.collection === filter)) &&
+    (!q || e.title.toLowerCase().includes(q) || (e.ext?.name || "").toLowerCase().includes(q) ||
+      e.seasons.some((r) => (r.name.english || "").toLowerCase().includes(q)))));
+  const chips = [["ALL", `Все · ${all.length}`]]
     .concat(newCount ? [["NEW", `Новые серии · ${newCount}`]] : [])
     .concat(COLLECTIONS.filter(([c]) => counts[c]).map(([c, t]) => [c, `${t} · ${counts[c]}`]))
-    .concat(counts.HISTORY ? [["HISTORY", `Из истории · ${counts.HISTORY}`]] : []);
+    .concat(counts.HISTORY ? [["HISTORY", `Из истории · ${counts.HISTORY}`]] : [])
+    .concat(extCount ? [["EXT", `Нет на AniLiberty · ${extCount}`]] : []);
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
   const showInstall = ios && !isStandalone() && !store.get("install_hint_closed", false);
 
@@ -699,16 +755,16 @@ function renderHome() {
   </header>
   <main>
     ${showInstall ? `<div class="hint"><div style="flex:1"><b>Добавьте на экран «Домой».</b> Нажмите «Поделиться» внизу Safari, затем «На экран "Домой"». Приложение будет открываться без адресной строки.</div><button class="icon-btn" id="hint-close" aria-label="Скрыть" style="width:28px;height:28px;color:var(--muted)">✕</button></div>` : ""}
-    ${entries.length > 1 ? `<div class="row" style="margin-bottom:10px">
+    ${all.length > 1 ? `<div class="row" style="margin-bottom:10px">
       <input class="search-in" id="list-q" type="search" placeholder="Найти в моём списке" value="${esc(listQuery)}" autocomplete="off">
       <select class="sort" id="sort" aria-label="Сортировка">${SORTS.map(([k, t]) => `<option value="${k}" ${sortMode === k ? "selected" : ""}>${t}</option>`).join("")}</select>
     </div>` : ""}
     <div class="chips">${chips.map(([k, t]) => `<button class="chip ${filter === k ? "on" : ""}" data-filter="${k}">${esc(t)}</button>`).join("")}</div>
     <div id="status" class="status"></div>
-    ${!entries.length && !sync.running ? `
+    ${!all.length && !sync.running ? `
       <div class="empty"><b>Список пуст</b><span>Сюда попадут тайтлы из ваших коллекций и истории просмотров на AniLiberty. Найдите аниме в каталоге и добавьте то, что уже посмотрели.</span><button class="btn" id="empty-search">Найти в каталоге</button></div>` : ""}
     <div class="list" id="list">${shown.map(cardHtml).join("")}</div>
-    ${entries.length && !shown.length ? `<p class="muted" style="text-align:center">Ничего не найдено</p>` : ""}
+    ${all.length && !shown.length ? `<p class="muted" style="text-align:center">Ничего не найдено</p>` : ""}
   </main>
   ${tabBar("home")}`;
   renderStatus();
@@ -735,11 +791,26 @@ function renderHome() {
   appEl.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { filter = b.dataset.filter; store.set("filter", filter); renderHome(); });
   appEl.querySelectorAll(".card").forEach((c) => c.onclick = (e) => {
     if (e.target.closest("a")) return;
-    go("title", { key: c.dataset.key });
+    const key = c.dataset.key;
+    if (key.startsWith("s:")) return openExternalSheet(saved[key.slice(2)]);
+    go("title", { key });
   });
 }
 
 function cardHtml(e) {
+  if (e.external) {
+    const x = e.ext;
+    const meta = [x.year, KIND[x.kind], x.episodes ? x.episodes + " эп." : null].filter(Boolean).join(" · ");
+    return `<div class="card" role="button" tabindex="0" data-key="${esc(e.key)}">
+      ${poster(e.poster)}
+      <div class="body">
+        <div class="title">${esc(e.title)}</div>
+        <div class="row" style="gap:6px;flex-wrap:wrap">${tag(e.collection)}<span class="tag src-ext">Нет на AniLiberty</span></div>
+        ${meta ? `<div class="muted">${esc(meta)}</div>` : ""}
+        <div class="muted">Серии не отслеживаются</div>
+      </div>
+    </div>`;
+  }
   const p = e.position;
   return `<div class="card" role="button" tabindex="0" data-key="${esc(e.key)}">
     ${poster(e.poster)}
@@ -790,23 +861,69 @@ let searchTimer = null, searchSeq = 0;
 function onQuery(value) {
   search.q = value;
   clearTimeout(searchTimer);
-  if (value.trim().length < 2) { search = { q: value, loading: false, results: [], error: null }; return renderResults(); }
-  searchTimer = setTimeout(async () => {
-    const seq = ++searchSeq;
-    search.loading = true; search.error = null; renderResults();
-    try { const r = await Api.search(value.trim()); if (seq === searchSeq) search.results = r || []; }
-    catch (e) { if (seq === searchSeq) search.error = "Поиск не удался: " + e.message; }
-    if (seq === searchSeq) { search.loading = false; renderResults(); }
-  }, 350);
+  if (value.trim().length < 2) { search = { q: value, loading: false, results: [], ext: [], checking: new Set(), error: null }; return renderResults(); }
+  searchTimer = setTimeout(() => runSearch(value.trim()), 350);
+}
+
+/**
+ * Searches AniLiberty and the general catalog together. A catalog title counts as "on AniLiberty"
+ * when an AniLiberty release carries its catalog id: first among the AniLiberty results for the
+ * query, then by searching AniLiberty for the title's original name.
+ */
+async function runSearch(q) {
+  const seq = ++searchSeq;
+  const live = () => seq === searchSeq;
+  search = { ...search, loading: true, error: null, ext: [], checking: new Set() };
+  renderResults();
+  const [lib, cat] = await Promise.allSettled([Api.search(q), Catalog.search(q)]);
+  if (!live()) return;
+  const results = lib.status === "fulfilled" ? lib.value || [] : [];
+  const byCatalogId = new Map(results.filter((r) => r.shikimori?.id).map((r) => [r.shikimori.id, r]));
+  const catalog = cat.status === "fulfilled" ? (cat.value || []).filter((a) => !HIDDEN_KINDS.has(a.kind)) : [];
+  const ext = [], unsure = [];
+  for (const a of catalog) {
+    const hit = byCatalogId.get(a.id);
+    if (hit) { rememberPresence(a.id, hit); continue; }
+    const known = knownPresence(a.id);
+    if (known?.r) { if (!results.some((r) => r.id === known.r.id)) results.push(known.r); continue; }
+    ext.push(a);
+    if (!known) unsure.push(a);
+  }
+  search = {
+    ...search, loading: false, results, ext, checking: new Set(unsure.map((a) => a.id)),
+    error: lib.status === "rejected" && cat.status === "rejected" ? "Поиск не удался: " + lib.reason.message
+      : lib.status === "rejected" ? "AniLiberty не ответил, показаны только тайтлы из общего каталога" : null,
+  };
+  renderResults();
+
+  await pool(unsure.slice(0, 10), 3, async (a) => {
+    let hit = null;
+    try {
+      const found = await Api.search(a.name);
+      hit = (found || []).find((r) => r.shikimori?.id === a.id) || null;
+    } catch { return; }
+    rememberPresence(a.id, hit);
+    if (!live()) return;
+    search.checking.delete(a.id);
+    if (hit) {
+      search.ext = search.ext.filter((x) => x.id !== a.id);
+      if (!search.results.some((r) => r.id === hit.id)) search.results.push(hit);
+    }
+    renderResults();
+  });
+  store.set("presence", presence);
+  if (live()) { search.checking.clear(); renderResults(); }
 }
 
 function renderResults() {
   const el = $("#results");
   if (!el) return;
+  const ext = search.ext || [];
   let html = search.loading ? `<div class="bar-progress indet" style="margin-bottom:8px"></div>` : "";
   if (search.error) html += `<div class="err">${esc(search.error)}</div>`;
-  if (!search.q.trim()) html += `<p class="muted">Ищите по русскому или английскому названию. Нажмите на тайтл, чтобы добавить его в коллекцию на AniLiberty.</p>`;
-  else if (!search.loading && search.q.trim().length >= 2 && !search.results.length && !search.error) html += `<p class="muted">Ничего не нашлось</p>`;
+  if (!search.q.trim()) html += `<p class="muted">Ищите по русскому или английскому названию. Поиск идёт по AniLiberty и по общему каталогу аниме: приложение само отмечает, что есть на AniLiberty, а чего там нет.</p>`;
+  else if (!search.loading && search.q.trim().length >= 2 && !search.results.length && !ext.length && !search.error) html += `<p class="muted">Ничего не нашлось</p>`;
+  if (search.results.length && ext.length) html += `<div class="section" style="margin-top:4px">Есть на AniLiberty</div>`;
   html += search.results.map((r) => {
     const meta = [r.year, r.type?.description, r.episodes_total ? r.episodes_total + " эп." : null, r.is_ongoing ? "выходит" : null].filter(Boolean).join(" · ");
     const c = cache.collections[r.id];
@@ -816,11 +933,88 @@ function renderResults() {
         <div class="title" style="font-size:15px">${esc(r.name.main)}</div>
         ${r.name.english ? `<div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name.english)}</div>` : ""}
         <div class="muted">${esc(meta)}</div>
-        ${c ? tag(c) : ""}
+        <div class="row" style="gap:6px;flex-wrap:wrap"><span class="tag src-al">AniLiberty</span>${c ? tag(c) : ""}</div>
       </div></button>`;
   }).join("");
+  if (ext.length) {
+    html += `<div class="section">Нет на AniLiberty</div>
+      <p class="muted" style="margin:-2px 0 4px">Их можно сохранить в свой список, но смотреть и отслеживать серии не получится.</p>`;
+    html += ext.map((a) => {
+      const mine = saved[a.id];
+      return `<button class="res" data-ext="${a.id}">
+        ${poster(catalogPoster(a), "sm")}
+        <div class="body">
+          <div class="title" style="font-size:15px">${esc(a.russian || a.name)}</div>
+          ${a.russian && a.name ? `<div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.name)}</div>` : ""}
+          <div class="muted">${esc(catalogMeta(a))}</div>
+          <div class="row" style="gap:6px;flex-wrap:wrap">${search.checking?.has(a.id) ? `<span class="tag">Проверяю AniLiberty…</span>` : `<span class="tag src-ext">Нет на AniLiberty</span>`}${mine ? tag(mine.collection) : ""}</div>
+        </div></button>`;
+    }).join("");
+  }
   el.innerHTML = html;
-  el.querySelectorAll(".res").forEach((b) => b.onclick = () => openAddSheet(search.results.find((r) => r.id === Number(b.dataset.id))));
+  el.querySelectorAll("[data-id]").forEach((b) => b.onclick = () => openAddSheet(search.results.find((r) => r.id === Number(b.dataset.id))));
+  el.querySelectorAll("[data-ext]").forEach((b) => b.onclick = () => openExternalSheet(ext.find((a) => a.id === Number(b.dataset.ext))));
+}
+
+/** Details of a title AniLiberty does not have, with a status kept on this device. */
+async function openExternalSheet(a) {
+  if (!a) return;
+  const current = saved[a.id]?.collection || null;
+  let choice = current || "PLANNED";
+  let details = null;
+  const draw = () => {
+    const d = details || a;
+    const genres = (details?.genres || []).map((g) => g.russian || g.name).filter(Boolean);
+    const studios = (details?.studios || []).map((x) => x.name).filter(Boolean);
+    const text = plainDescription(details?.description);
+    openSheet(`
+      <div class="grab"></div>
+      <div class="head" style="margin-bottom:4px">
+        ${poster(catalogPoster(d), "")}
+        <div class="body" style="gap:4px">
+          <div class="title" style="font-size:18px;-webkit-line-clamp:3">${esc(d.russian || d.name)}</div>
+          ${d.russian && d.name ? `<div class="muted">${esc(d.name)}</div>` : ""}
+          <div class="muted">${esc(catalogMeta(d))}${STATUS[d.status] ? " · " + esc(STATUS[d.status]) : ""}</div>
+          ${Number(d.score) > 0 ? `<div class="muted">Рейтинг ${esc(String(d.score).replace(".", ","))}</div>` : ""}
+          <span class="tag src-ext">Нет на AniLiberty</span>
+        </div>
+      </div>
+      ${genres.length ? `<div class="muted">${esc(genres.join(", "))}${studios.length ? " · " + esc(studios.join(", ")) : ""}</div>` : ""}
+      ${details ? (text ? `<p class="desc">${esc(text)}</p>` : "") : `<div class="bar-progress indet" style="margin:8px 0"></div>`}
+      <div class="section" style="margin-top:6px">Статус в моём списке</div>
+      ${COLLECTIONS.map(([c, t]) => `<button class="opt ${choice === c ? "on" : ""}" data-c="${c}"><span class="dot"></span>${t}</button>`).join("")}
+      <p class="muted" style="margin:6px 0 0">Сохраняется только на этом устройстве, без отслеживания серий.</p>
+      <button class="btn block" id="ext-save" style="margin-top:10px">${current ? "Сохранить" : "Добавить в мой список"}</button>
+      ${current ? `<button class="btn text danger block" id="ext-remove">Убрать из списка</button>` : ""}`);
+    sheetEl.querySelectorAll("[data-c]").forEach((b) => b.onclick = () => { choice = b.dataset.c; draw(); });
+    $("#ext-save").onclick = () => {
+      const g = (details?.genres || []).map((x) => x.russian || x.name).filter(Boolean);
+      saved[a.id] = {
+        id: a.id, title: d.russian || d.name, name: d.name, poster: catalogPoster(d), kind: d.kind,
+        year: (d.aired_on || "").slice(0, 4) || null, episodes: d.episodes || d.episodes_aired || null,
+        status: d.status, genres: g.length ? g : saved[a.id]?.genres || [], collection: choice,
+        addedAt: saved[a.id]?.addedAt || Date.now(),
+      };
+      saveExternal();
+      closeSheet();
+      toast(`«${saved[a.id].title}» → ${collectionTitle(choice)}`);
+      render();
+    };
+    const rm = $("#ext-remove");
+    if (rm) rm.onclick = () => {
+      const t = saved[a.id].title;
+      delete saved[a.id];
+      saveExternal();
+      closeSheet();
+      toast(`«${t}» убран из списка`);
+      render();
+    };
+  };
+  draw();
+  try {
+    details = await Catalog.anime(a.id);
+    if (sheetEl.querySelector("#ext-save")) draw();
+  } catch {}
 }
 
 function openAddSheet(release) {
